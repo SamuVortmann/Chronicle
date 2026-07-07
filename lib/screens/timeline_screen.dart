@@ -1,3 +1,5 @@
+// lib/screens/timeline_screen.dart
+
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:travel/database/database_helper.dart';
@@ -16,11 +18,11 @@ class _TimelineScreenState extends State<TimelineScreen> with AutomaticKeepAlive
 
   List<Registro> _all      = [];
   List<Registro> _filtered = [];
-  List<String>   _albuns   = [];
+  List<Album>    _albuns   = [];
   bool   _loading = true;
   String _search  = '';
   String? _tagFilter;
-  String? _albumFilter;
+  int?    _albumFilter;
 
   @override
   void initState() { super.initState(); _load(); }
@@ -29,7 +31,7 @@ class _TimelineScreenState extends State<TimelineScreen> with AutomaticKeepAlive
     setState(() => _loading = true);
     try {
       final r = await DatabaseHelper.instance.listarRegistros();
-      final a = (await DatabaseHelper.instance.listarAlbuns()) as List<String>;
+      final a = await DatabaseHelper.instance.listarAlbuns();
       if (mounted) setState(() { _all = r; _albuns = a; _loading = false; _applyFilters(); });
     } catch (e) {
       if (mounted) { setState(() => _loading = false); showError(context, e.toString()); }
@@ -44,7 +46,7 @@ class _TimelineScreenState extends State<TimelineScreen> with AutomaticKeepAlive
             r.local.toLowerCase().contains(_search.toLowerCase()) ||
             r.descricao.toLowerCase().contains(_search.toLowerCase());
         final matchTag   = _tagFilter == null || r.tagList.contains(_tagFilter);
-        final matchAlbum = _albumFilter == null || r.album == _albumFilter;
+        final matchAlbum = _albumFilter == null || r.albumId == _albumFilter;
         return matchSearch && matchTag && matchAlbum;
       }).toList();
     });
@@ -122,7 +124,9 @@ class _TimelineScreenState extends State<TimelineScreen> with AutomaticKeepAlive
       Expanded(child: Wrap(spacing: 6, children: [
         if (_search.isNotEmpty) _filterChip('Busca: $_search', () { _search = ''; _applyFilters(); }),
         if (_tagFilter != null) _filterChip(_tagFilter!, () { _tagFilter = null; _applyFilters(); }),
-        if (_albumFilter != null) _filterChip(_albumFilter!, () { _albumFilter = null; _applyFilters(); }),
+        if (_albumFilter != null) _filterChip(
+          _albuns.firstWhere((a) => a.id == _albumFilter, orElse: () => Album(nome: 'Album', criadoEm: '')).nome,
+          () { _albumFilter = null; _applyFilters(); }),
       ])),
       GestureDetector(
         onTap: () { _search = ''; _tagFilter = null; _albumFilter = null; _applyFilters(); },
@@ -217,9 +221,9 @@ class _TimelineScreenState extends State<TimelineScreen> with AutomaticKeepAlive
         albuns: _albuns,
         allTags: _all.expand((r) => r.tagList).toSet().toList(),
         selectedTag: _tagFilter,
-        selectedAlbum: _albumFilter,
-        onApply: (tag, album) {
-          setState(() { _tagFilter = tag; _albumFilter = album; });
+        selectedAlbumId: _albumFilter,
+        onApply: (tag, albumId) {
+          setState(() { _tagFilter = tag; _albumFilter = albumId; });
           _applyFilters();
         },
       ),
@@ -259,21 +263,21 @@ class _SearchDialogState extends State<_SearchDialog> {
 
 // ── Filter bottom sheet ───────────────────────────────────────────────────────
 class _FilterSheet extends StatefulWidget {
-  final List<String>  albuns;
-  final List<String>  allTags;
-  final String?       selectedTag;
-  final String?       selectedAlbum;
-  final void Function(String? tag, String? album) onApply;
+  final List<Album>  albuns;
+  final List<String> allTags;
+  final String?  selectedTag;
+  final int?     selectedAlbumId;
+  final void Function(String? tag, int? albumId) onApply;
   const _FilterSheet({required this.albuns, required this.allTags,
-      required this.selectedTag, required this.selectedAlbum, required this.onApply});
+      required this.selectedTag, required this.selectedAlbumId, required this.onApply});
   @override
   State<_FilterSheet> createState() => _FilterSheetState();
 }
 class _FilterSheetState extends State<_FilterSheet> {
   String? _tag;
-  String? _album;
+  int?    _albumId;
   @override
-  void initState() { super.initState(); _tag = widget.selectedTag; _album = widget.selectedAlbum; }
+  void initState() { super.initState(); _tag = widget.selectedTag; _albumId = widget.selectedAlbumId; }
   @override
   Widget build(BuildContext context) => SafeArea(child: Padding(
     padding: const EdgeInsets.all(16),
@@ -283,8 +287,8 @@ class _FilterSheetState extends State<_FilterSheet> {
       const Text('Filtrar por álbum', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: kTextTertiary, letterSpacing: 0.4)),
       const SizedBox(height: 8),
       Wrap(spacing: 6, runSpacing: 6, children: [
-        _chip('Todos', _album == null, () => setState(() => _album = null)),
-        ...widget.albuns.map((a) => _chip(a, _album == a, () => setState(() => _album = a))),
+        _chip('Todos', _albumId == null, () => setState(() => _albumId = null)),
+        ...widget.albuns.map((a) => _chip(a.nome, _albumId == a.id, () => setState(() => _albumId = a.id))),
       ]),
       if (widget.allTags.isNotEmpty) ...[
         const SizedBox(height: 14),
@@ -297,7 +301,7 @@ class _FilterSheetState extends State<_FilterSheet> {
       ],
       const SizedBox(height: 16),
       SizedBox(width: double.infinity, child: ElevatedButton(
-        onPressed: () { Navigator.pop(context); widget.onApply(_tag, _album); },
+        onPressed: () { Navigator.pop(context); widget.onApply(_tag, _albumId); },
         style: ElevatedButton.styleFrom(backgroundColor: kGreen, foregroundColor: Colors.white,
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
         child: const Text('Aplicar filtros'),

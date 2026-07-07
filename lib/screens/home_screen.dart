@@ -1,52 +1,24 @@
 // lib/screens/home_screen.dart
+//
+// Fixes vs RAR version:
+//  1. Album section was hardcoded static list — now loads from DB
+//  2. "Ver todos" did nothing — now navigates to AlbunsScreen
+//  3. Bottom nav tapping didn't navigate — replaced with proper screen routing
+//  4. duplicate main() removed (main is only in main.dart)
+//  5. _AlbumData helper class replaced with real Album model
 
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:travel/database/database_helper.dart';
 import 'package:travel/screens/novo_registro_screen.dart';
+import 'package:travel/screens/timeline_screen.dart';
+import 'package:travel/screens/albuns_screen.dart';
+import 'package:travel/screens/album_detail_screen.dart';
+import 'package:travel/utils/app_constants.dart';
 
-// ─── Constantes de cor ───────────────────────────────────────────────────────
-const _kGreen         = Color(0xFF2E9E50);
-const _kGreenLight    = Color(0xFFE6F4EC);
-const _kGreenBorder   = Color(0xFFB5D9C2);
-const _kBg            = Color(0xFFF2F2F7);
-const _kCard          = Color(0xFFFFFFFF);
-const _kBorder        = Color(0xFFE5E5EA);
-const _kTextPrimary   = Color(0xFF1C1C1E);
-const _kTextSecondary = Color(0xFF6C6C70);
-const _kTextTertiary  = Color(0xFFAEAEB2);
-
-// ─── Entry point ─────────────────────────────────────────────────────────────
-void main() async {
-  WidgetsFlutterBinding.ensureInitialized();
-  // Inicializa SQLite via FFI em Desktop/Web (Windows, Linux, macOS)
-  // No Android/iOS o sqflite nativo já funciona sem isso
-  DatabaseHelper.initFfiIfNeeded();
-  runApp(const MyApp());
-}
-
-class MyApp extends StatelessWidget {
-  const MyApp({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Chronicle',
-      debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        useMaterial3: true,
-        colorScheme: ColorScheme.fromSeed(seedColor: _kGreen),
-        scaffoldBackgroundColor: _kBg,
-      ),
-      home: const HomeScreen(),
-    );
-  }
-}
-
-// ─── Home Screen ─────────────────────────────────────────────────────────────
+// ─── Root widget that owns the bottom nav shell ───────────────────────────────
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
-
   @override
   State<HomeScreen> createState() => _HomeScreenState();
 }
@@ -54,542 +26,390 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   int _navIndex = 0;
 
-  List<Registro> _registros = [];
-  int _totalRegistros = 0;
-
-  // Três estados possíveis: loading | loaded | error
-  bool _loading = true;
-  String? _erro;
+  // Each tab keeps its own scroll / state via AutomaticKeepAliveClientMixin
+  late final List<Widget> _pages;
 
   @override
   void initState() {
     super.initState();
-    _loadData();
+    _pages = [
+      const _HomeTab(),
+      const TimelineScreen(),
+      const SizedBox(), // placeholder — Map / Insights not yet implemented
+      const SizedBox(),
+    ];
   }
 
-  Future<void> _loadData() async {
-    // Garante que _loading seja true antes de qualquer await
+  Future<void> _openNovoRegistro() async {
+    final ok = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(builder: (_) => const NovoRegistroScreen()),
+    );
+    if (ok == true) setState(() {}); // trigger rebuild so _HomeTab refreshes
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: IndexedStack(index: _navIndex, children: _pages),
+      floatingActionButtonLocation: FloatingActionButtonLocation.centerDocked,
+      floatingActionButton: FloatingActionButton(
+        onPressed: _openNovoRegistro,
+        backgroundColor: kGreen,
+        elevation: 4,
+        child: const Icon(Icons.add, color: Colors.white),
+      ),
+      bottomNavigationBar: BottomAppBar(
+        color: kCard,
+        elevation: 8,
+        notchMargin: 6,
+        shape: const CircularNotchedRectangle(),
+        child: SizedBox(
+          height: 56,
+          child: Row(children: [
+            _navItem(0, Icons.home_outlined,      'Home'),
+            _navItem(1, Icons.timeline_outlined,  'Timeline'),
+            const Expanded(child: SizedBox()),
+            _navItem(2, Icons.map_outlined,       'Mapa'),
+            _navItem(3, Icons.show_chart_outlined,'Insights'),
+          ]),
+        ),
+      ),
+    );
+  }
+
+  Widget _navItem(int idx, IconData icon, String label) {
+    final active = _navIndex == idx;
+    return Expanded(
+      child: GestureDetector(
+        onTap: () => setState(() => _navIndex = idx),
+        child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+          Icon(icon, size: 22, color: active ? kGreen : kTextTertiary),
+          const SizedBox(height: 2),
+          Text(label, style: TextStyle(fontSize: 10,
+              color: active ? kGreen : kTextTertiary,
+              fontWeight: active ? FontWeight.w600 : FontWeight.normal)),
+        ]),
+      ),
+    );
+  }
+}
+
+// ─── Home tab content ─────────────────────────────────────────────────────────
+class _HomeTab extends StatefulWidget {
+  const _HomeTab();
+  @override
+  State<_HomeTab> createState() => _HomeTabState();
+}
+
+class _HomeTabState extends State<_HomeTab> with AutomaticKeepAliveClientMixin {
+  @override
+  bool get wantKeepAlive => true;
+
+  List<Registro> _registros = [];
+  List<Album>    _albuns    = [];
+  int    _total   = 0;
+  bool   _loading = true;
+  String? _erro;
+
+  @override
+  void initState() { super.initState(); _load(); }
+
+  Future<void> _load() async {
     if (mounted) setState(() { _loading = true; _erro = null; });
-
     try {
-      final registros = await DatabaseHelper.instance.listarRegistros();
-      final total     = await DatabaseHelper.instance.totalRegistros();
-
-      if (mounted) {
-        setState(() {
-          _registros      = registros;
-          _totalRegistros = total;
-          _loading        = false;
-        });
-      }
+      final r = await DatabaseHelper.instance.listarRegistros();
+      final a = await DatabaseHelper.instance.listarAlbuns();
+      final t = await DatabaseHelper.instance.totalRegistros();
+      if (mounted) setState(() {
+        _registros = r; _albuns = a; _total = t; _loading = false;
+      });
     } catch (e) {
-      // Sem try/catch aqui o spinner ficava eterno quando o banco falhava
-      if (mounted) {
-        setState(() {
-          _loading = false;
-          _erro    = e.toString();
-        });
-      }
+      if (mounted) setState(() { _loading = false; _erro = e.toString(); });
     }
   }
 
   Future<void> _goToNovoRegistro() async {
-    final result = await Navigator.push<bool>(
-      context,
-      MaterialPageRoute(builder: (_) => const NovoRegistroPage()),
-    );
-    if (result == true) _loadData();
+    final ok = await Navigator.push<bool>(
+        context, MaterialPageRoute(builder: (_) => const NovoRegistroScreen()));
+    if (ok == true) _load();
   }
 
-  // ─── Build ─────────────────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
+    super.build(context);
     return Scaffold(
-      backgroundColor: _kBg,
+      backgroundColor: kBg,
       appBar: AppBar(
-        backgroundColor: _kGreen,
-        elevation: 0,
-        title: const Row(
-          children: [
-            Icon(Icons.public, color: Colors.white, size: 20),
-            SizedBox(width: 6),
-            Text(
-              'Chronicle',
-              style: TextStyle(
-                color: Colors.white, fontSize: 16, fontWeight: FontWeight.w600,
-              ),
-            ),
-          ],
-        ),
+        backgroundColor: kGreen, elevation: 0,
+        title: const Row(children: [
+          Icon(Icons.public, color: Colors.white, size: 20),
+          SizedBox(width: 6),
+          Text('Chronicle', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w600)),
+        ]),
         actions: [
-          IconButton(
-            icon: const Icon(Icons.notifications_outlined, color: Colors.white),
-            onPressed: () {},
-          ),
-          IconButton(
-            icon: const Icon(Icons.settings_outlined, color: Colors.white),
-            onPressed: () {},
-          ),
+          IconButton(icon: const Icon(Icons.notifications_outlined, color: Colors.white), onPressed: () {}),
+          IconButton(icon: const Icon(Icons.settings_outlined, color: Colors.white), onPressed: () {}),
         ],
       ),
-      body: _buildBody(),
-      bottomNavigationBar: _buildBottomNav(),
-      floatingActionButtonLocation: FloatingActionButtonLocation.centerDocked,
-      floatingActionButton: FloatingActionButton(
-        onPressed: _goToNovoRegistro,
-        backgroundColor: _kGreen,
-        elevation: 4,
-        child: const Icon(Icons.add, color: Colors.white),
-      ),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator(color: kGreen))
+          : _erro != null ? _errorView() : _content(),
     );
   }
 
-  Widget _buildBody() {
-    if (_loading) {
-      return const Center(child: CircularProgressIndicator(color: _kGreen));
+  Widget _errorView() => Center(child: Padding(
+    padding: const EdgeInsets.all(24),
+    child: Column(mainAxisSize: MainAxisSize.min, children: [
+      const Icon(Icons.error_outline, size: 48, color: kRed),
+      const SizedBox(height: 12),
+      const Text('Não foi possível carregar os dados.',
+          style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600), textAlign: TextAlign.center),
+      const SizedBox(height: 6),
+      Text(_erro!, style: const TextStyle(fontSize: 12, color: kTextSecondary), textAlign: TextAlign.center),
+      const SizedBox(height: 20),
+      ElevatedButton.icon(onPressed: _load,
+          icon: const Icon(Icons.refresh), label: const Text('Tentar novamente'),
+          style: ElevatedButton.styleFrom(backgroundColor: kGreen, foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)))),
+    ]),
+  ));
+
+  Widget _content() => RefreshIndicator(
+    color: kGreen, onRefresh: _load,
+    child: SingleChildScrollView(
+      physics: const AlwaysScrollableScrollPhysics(),
+      padding: const EdgeInsets.only(bottom: 80),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        _sectionHeader('ÁLBUNS', action: 'Ver todos',
+            onAction: () => Navigator.push(context,
+                MaterialPageRoute(builder: (_) => const AlbunsScreen())).then((_) => _load())),
+        _albumsRow(),
+        const _SectionHead('ÚLTIMOS ACESSOS'),
+        _recentList(),
+        const _SectionHead('CONTINUAR HOJE'),
+        _continueTodayCard(),
+        const _SectionHead('ESTATÍSTICAS'),
+        _statsCard(),
+      ]),
+    ),
+  );
+
+  // ── Albums ─────────────────────────────────────────────────────────────────
+  Widget _albumsRow() {
+    if (_albuns.isEmpty) {
+      return _emptyCard(Icons.add_circle_outline, 'Criar primeiro álbum',
+          onTap: () => Navigator.push(context,
+              MaterialPageRoute(builder: (_) => const AlbunsScreen())).then((_) => _load()));
     }
-
-    if (_erro != null) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(Icons.error_outline, size: 48, color: Colors.red),
-              const SizedBox(height: 12),
-              const Text(
-                'Não foi possível carregar os dados.',
-                style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: _kTextPrimary),
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 6),
-              Text(
-                _erro!,
-                style: const TextStyle(fontSize: 12, color: _kTextSecondary),
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 20),
-              ElevatedButton.icon(
-                onPressed: _loadData,
-                icon: const Icon(Icons.refresh),
-                label: const Text('Tentar novamente'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: _kGreen,
-                  foregroundColor: Colors.white,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                ),
-              ),
-            ],
-          ),
-        ),
-      );
-    }
-
-    return RefreshIndicator(
-      color: _kGreen,
-      onRefresh: _loadData,
-      child: SingleChildScrollView(
-        physics: const AlwaysScrollableScrollPhysics(),
-        padding: const EdgeInsets.only(bottom: 80),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            _sectionHeader('ÁLBUNS', showViewAll: true),
-            _albumsSection(),
-            _sectionHeader('ÚLTIMOS ACESSOS'),
-            _recentSection(),
-            _sectionHeader('CONTINUAR HOJE'),
-            _continueTodaySection(),
-            _sectionHeader('ESTATÍSTICAS'),
-            _statisticsSection(),
-          ],
-        ),
-      ),
-    );
-  }
-
-  // ─── Seções ────────────────────────────────────────────────────────────────
-
-  Widget _sectionHeader(String title, {bool showViewAll = false}) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 20, 16, 0),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Text(
-            title,
-            style: const TextStyle(
-              fontSize: 11, fontWeight: FontWeight.w700,
-              color: _kTextTertiary, letterSpacing: 0.5,
-            ),
-          ),
-          if (showViewAll)
-            GestureDetector(
-              onTap: () {},
-              child: const Text(
-                'Ver todos',
-                style: TextStyle(color: _kGreen, fontSize: 12, fontWeight: FontWeight.w600),
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-
-  // Álbuns
-  Widget _albumsSection() {
-    final albums = [
-      _AlbumData('Inverno',   Icons.ac_unit,                  true),
-      _AlbumData('Verão',     Icons.wb_sunny_outlined,        false),
-      _AlbumData('Outono',    Icons.eco_outlined,             false),
-      _AlbumData('Primavera', Icons.local_florist_outlined,   false),
-    ];
-
     return SizedBox(
-      height: 128,
+      height: 130,
       child: ListView.separated(
         scrollDirection: Axis.horizontal,
         padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-        itemCount: albums.length,
+        itemCount: _albuns.length + 1,
         separatorBuilder: (_, __) => const SizedBox(width: 10),
-        itemBuilder: (_, i) => _albumCard(albums[i]),
+        itemBuilder: (_, i) => i < _albuns.length
+            ? _albumTile(_albuns[i])
+            : _addAlbumTile(),
       ),
     );
   }
 
-  Widget _albumCard(_AlbumData data) {
-    return SizedBox(
-      width: 90,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            height: 78, width: 90,
-            decoration: BoxDecoration(
-              color:  data.active ? _kGreenLight : _kCard,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: data.active ? _kGreenBorder : _kBorder),
-            ),
-            child: Center(
-              child: Icon(data.icon, size: 28, color: data.active ? _kGreen : _kTextTertiary),
-            ),
-          ),
-          const SizedBox(height: 6),
-          Text(
-            data.name,
-            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _kTextPrimary),
-          ),
-          const Text('2026 · Você', style: TextStyle(fontSize: 10, color: _kTextTertiary)),
-        ],
-      ),
+  Widget _albumTile(Album a) {
+    final color = hexToColor(a.cor);
+    final bg    = Color.alphaBlend(color.withOpacity(0.12), Colors.white);
+    return GestureDetector(
+      onTap: () => Navigator.push(context,
+          MaterialPageRoute(builder: (_) => AlbumDetailScreen(album: a))).then((_) => _load()),
+      child: SizedBox(width: 90, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Container(height: 78, width: 90,
+            decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: color.withOpacity(0.3))),
+            child: Center(child: Icon(iconFromString(a.icone), size: 30, color: color))),
+        const SizedBox(height: 6),
+        Text(a.nome, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: kTextPrimary),
+            maxLines: 1, overflow: TextOverflow.ellipsis),
+        const Text('2026 · Você', style: TextStyle(fontSize: 10, color: kTextTertiary)),
+      ])),
     );
   }
 
-  // Últimos Acessos
-  Widget _recentSection() {
-    if (_registros.isEmpty) {
-      return Padding(
-        padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-        child: Container(
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: _kCard,
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: _kBorder),
-          ),
-          child: const Row(
-            children: [
-              Icon(Icons.history, color: _kTextTertiary, size: 20),
-              SizedBox(width: 10),
-              Text(
-                'Nenhum registro ainda.',
-                style: TextStyle(fontSize: 13, color: _kTextSecondary),
-              ),
-            ],
-          ),
-        ),
-      );
-    }
+  Widget _addAlbumTile() => GestureDetector(
+    onTap: () => Navigator.push(context,
+        MaterialPageRoute(builder: (_) => const AlbunsScreen())).then((_) => _load()),
+    child: SizedBox(width: 90, child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Container(height: 78, width: 90,
+          decoration: BoxDecoration(color: kCard, borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: kBorder)),
+          child: const Center(child: Icon(Icons.add, size: 28, color: kTextTertiary))),
+      const SizedBox(height: 6),
+      const Text('Novo álbum', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: kTextTertiary)),
+    ])),
+  );
 
-    final recentes = _registros.take(3).toList();
+  // ── Recent ─────────────────────────────────────────────────────────────────
+  Widget _recentList() {
+    if (_registros.isEmpty) return _emptyCard(Icons.history, 'Nenhum registro ainda.');
+    final items = _registros.take(3).toList();
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
       child: Container(
-        decoration: BoxDecoration(
-          color: _kCard,
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: _kBorder),
-        ),
-        child: Column(
-          children: recentes.asMap().entries.map((e) {
-            final isLast = e.key == recentes.length - 1;
-            return Column(
-              children: [
-                _recentItem(e.value),
-                if (!isLast)
-                  const Divider(height: 1, indent: 16, endIndent: 16, color: _kBorder),
-              ],
-            );
-          }).toList(),
-        ),
+        decoration: BoxDecoration(color: kCard, borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: kBorder)),
+        child: Column(children: items.asMap().entries.map((e) => Column(children: [
+          _recentTile(e.value),
+          if (e.key < items.length - 1)
+            const Divider(height: 1, indent: 16, endIndent: 16, color: kBorderLight),
+        ])).toList()),
       ),
     );
   }
 
-  Widget _recentItem(Registro r) {
-    const moodEmoji = ['😊', '😄', '😐', '😢', '😍'];
-    final dataFmt   = _formatDate(r.dataHora);
-    final temFoto   = r.fotos.isNotEmpty && File(r.fotos.first).existsSync();
-
+  Widget _recentTile(Registro r) {
+    final hasPhoto = r.fotos.isNotEmpty && File(r.fotos.first).existsSync();
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      child: Row(
-        children: [
-          Container(
-            width: 42, height: 42,
-            decoration: BoxDecoration(
-              color: temFoto ? Colors.transparent : _kGreenLight,
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: _kBorder),
-            ),
-            child: temFoto
-                ? ClipRRect(
-                    borderRadius: BorderRadius.circular(10),
-                    child: Image.file(
-                      File(r.fotos.first),
-                      fit: BoxFit.cover,
-                      errorBuilder: (_, __, ___) =>
-                          const Icon(Icons.broken_image_outlined, size: 20, color: _kTextTertiary),
-                    ),
-                  )
-                : const Icon(Icons.camera_alt_outlined, size: 20, color: _kGreen),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  r.titulo,
-                  style: const TextStyle(
-                    fontSize: 13, fontWeight: FontWeight.w600, color: _kTextPrimary,
-                  ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                Text(
-                  r.local.isNotEmpty ? '${r.local} · $dataFmt' : dataFmt,
-                  style: const TextStyle(fontSize: 11, color: _kTextSecondary),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(width: 6),
-          Text(moodEmoji[r.humor.clamp(0, 4)], style: const TextStyle(fontSize: 16)),
-        ],
-      ),
+      child: Row(children: [
+        Container(
+          width: 42, height: 42,
+          decoration: BoxDecoration(
+              color: hasPhoto ? Colors.transparent : kGreenLight,
+              borderRadius: BorderRadius.circular(10), border: Border.all(color: kBorder)),
+          child: hasPhoto
+              ? ClipRRect(borderRadius: BorderRadius.circular(10),
+                  child: Image.file(File(r.fotos.first), fit: BoxFit.cover,
+                      errorBuilder: (_, __, ___) => const Icon(Icons.broken_image_outlined, size: 18, color: kTextTertiary)))
+              : const Icon(Icons.camera_alt_outlined, size: 20, color: kGreen),
+        ),
+        const SizedBox(width: 10),
+        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(r.titulo, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: kTextPrimary),
+              maxLines: 1, overflow: TextOverflow.ellipsis),
+          Text(r.local.isNotEmpty ? '${r.local} · ${formatDateShort(r.dataHora)}' : formatDateShort(r.dataHora),
+              style: const TextStyle(fontSize: 11, color: kTextSecondary)),
+        ])),
+        const SizedBox(width: 6),
+        Text(kMoods[r.humor.clamp(0, 4)], style: const TextStyle(fontSize: 16)),
+      ]),
     );
   }
 
-  // Continuar Hoje
-  Widget _continueTodaySection() {
+  // ── Continue today ─────────────────────────────────────────────────────────
+  Widget _continueTodayCard() {
     final hoje    = DateTime.now();
     final temHoje = _registros.any((r) {
       final dt = DateTime.tryParse(r.dataHora);
-      return dt != null &&
-          dt.year == hoje.year && dt.month == hoje.month && dt.day == hoje.day;
+      return dt != null && dt.year == hoje.year && dt.month == hoje.month && dt.day == hoje.day;
     });
-
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
       child: GestureDetector(
         onTap: _goToNovoRegistro,
         child: Container(
           padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: _kGreen,
-            borderRadius: BorderRadius.circular(14),
-          ),
-          child: Row(
-            children: [
-              Container(
-                width: 46, height: 46,
-                decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.15),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: const Icon(Icons.camera_alt_outlined, color: Colors.white, size: 24),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      temHoje ? 'Continuar o registro de hoje' : 'Adicionar registro diário',
-                      style: const TextStyle(
-                        color: Colors.white, fontWeight: FontWeight.w600, fontSize: 14,
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      temHoje
-                          ? 'Você já tem um registro hoje 🎉'
-                          : 'Ainda não há entrada para hoje',
-                      style: TextStyle(color: Colors.white.withOpacity(0.8), fontSize: 11),
-                    ),
-                  ],
-                ),
-              ),
-              const Icon(Icons.chevron_right, color: Colors.white70, size: 20),
-            ],
-          ),
+          decoration: BoxDecoration(color: kGreen, borderRadius: BorderRadius.circular(14)),
+          child: Row(children: [
+            Container(width: 46, height: 46,
+                decoration: BoxDecoration(color: Colors.white.withOpacity(0.15),
+                    borderRadius: BorderRadius.circular(12)),
+                child: const Icon(Icons.camera_alt_outlined, color: Colors.white, size: 24)),
+            const SizedBox(width: 12),
+            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(temHoje ? 'Continuar o registro de hoje' : 'Adicionar registro diário',
+                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 14)),
+              const SizedBox(height: 2),
+              Text(temHoje ? 'Você já tem um registro hoje 🎉' : 'Ainda não há entrada para hoje',
+                  style: TextStyle(color: Colors.white.withOpacity(0.8), fontSize: 11)),
+            ])),
+            const Icon(Icons.chevron_right, color: Colors.white70, size: 20),
+          ]),
         ),
       ),
     );
   }
 
-  // Estatísticas
-  Widget _statisticsSection() {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+  // ── Stats ──────────────────────────────────────────────────────────────────
+  Widget _statsCard() => Padding(
+    padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+    child: Container(
+      decoration: BoxDecoration(color: kCard, borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: kBorder)),
+      child: Column(children: [
+        _statRow('Registros',        '$_total',                  isFirst: true),
+        _statRow('Sequência',        '${_sequencia()} dias'),
+        _statRow('Álbuns',           '${_albuns.length}',        valueColor: kGreen),
+        _statRow('Locais visitados', '${_locaisUnicos()}',       isLast: true),
+      ]),
+    ),
+  );
+
+  Widget _statRow(String label, String value,
+      {bool isFirst = false, bool isLast = false, Color? valueColor}) =>
+      Column(children: [
+        if (!isFirst) const Divider(height: 1, indent: 16, endIndent: 16, color: kBorderLight),
+        Padding(padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+            child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+              Text(label, style: const TextStyle(fontSize: 13, color: kTextSecondary)),
+              Text(value, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600,
+                  color: valueColor ?? kTextPrimary)),
+            ])),
+      ]);
+
+  // ── Helpers ────────────────────────────────────────────────────────────────
+  Widget _emptyCard(IconData icon, String label, {VoidCallback? onTap}) => Padding(
+    padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+    child: GestureDetector(
+      onTap: onTap,
       child: Container(
-        decoration: BoxDecoration(
-          color: _kCard,
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: _kBorder),
-        ),
-        child: Column(
-          children: [
-            _statRow('Registros', '$_totalRegistros', isFirst: true),
-            _statRow('Sequência', '${_calcularSequencia()} dias'),
-            _statRow('Estações completas', '4', valueColor: _kGreen),
-            _statRow('Locais visitados', '${_locaisUnicos()}', isLast: true),
-          ],
-        ),
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(color: kCard, borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: kBorder)),
+        child: Row(children: [
+          Icon(icon, color: onTap != null ? kGreen : kTextTertiary),
+          const SizedBox(width: 10),
+          Text(label, style: TextStyle(color: onTap != null ? kGreen : kTextSecondary,
+              fontWeight: onTap != null ? FontWeight.w600 : FontWeight.normal)),
+        ]),
       ),
-    );
-  }
+    ),
+  );
 
-  Widget _statRow(
-    String label,
-    String value, {
-    bool isFirst = false,
-    bool isLast  = false,
-    Color? valueColor,
-  }) {
-    return Column(
-      children: [
-        if (!isFirst)
-          const Divider(height: 1, indent: 16, endIndent: 16, color: _kBorder),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(label, style: const TextStyle(fontSize: 13, color: _kTextSecondary)),
-              Text(
-                value,
-                style: TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                  color: valueColor ?? _kTextPrimary,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
+  Widget _sectionHeader(String title, {String? action, VoidCallback? onAction}) => Padding(
+    padding: const EdgeInsets.fromLTRB(16, 20, 16, 0),
+    child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+      Text(title, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700,
+          color: kTextTertiary, letterSpacing: 0.5)),
+      if (action != null)
+        GestureDetector(onTap: onAction,
+            child: Text(action, style: const TextStyle(color: kGreen, fontSize: 12, fontWeight: FontWeight.w600))),
+    ]),
+  );
 
-  // ─── Bottom nav ────────────────────────────────────────────────────────────
-  Widget _buildBottomNav() {
-    return BottomAppBar(
-      color: _kCard,
-      elevation: 8,
-      notchMargin: 6,
-      shape: const CircularNotchedRectangle(),
-      child: SizedBox(
-        height: 56,
-        child: Row(
-          children: [
-            _navItem(0, Icons.home_outlined,      'Home'),
-            _navItem(1, Icons.timeline_outlined,  'Timeline'),
-            const Expanded(child: SizedBox()),   // espaço central para o FAB
-            _navItem(2, Icons.map_outlined,       'Mapa'),
-            _navItem(3, Icons.show_chart_outlined,'Insights'),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _navItem(int index, IconData icon, String label) {
-    final active = _navIndex == index;
-    return Expanded(
-      child: GestureDetector(
-        onTap: () => setState(() => _navIndex = index),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(icon, size: 22, color: active ? _kGreen : _kTextTertiary),
-            const SizedBox(height: 2),
-            Text(
-              label,
-              style: TextStyle(
-                fontSize: 10,
-                color: active ? _kGreen : _kTextTertiary,
-                fontWeight: active ? FontWeight.w600 : FontWeight.normal,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  // ─── Helpers ───────────────────────────────────────────────────────────────
-  String _formatDate(String iso) {
-    final dt = DateTime.tryParse(iso);
-    if (dt == null) return '';
-    const m = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
-    return '${dt.day} ${m[dt.month - 1]}';
-  }
-
-  int _calcularSequencia() {
+  int _sequencia() {
     if (_registros.isEmpty) return 0;
-    final dias = _registros
-        .map((r) => DateTime.tryParse(r.dataHora))
-        .whereType<DateTime>()
-        .map((dt) => DateTime(dt.year, dt.month, dt.day))
-        .toSet()
-        .toList()
-      ..sort((a, b) => b.compareTo(a));
-
-    int seq = 1;
+    final dias = _registros.map((r) => DateTime.tryParse(r.dataHora))
+        .whereType<DateTime>().map((d) => DateTime(d.year, d.month, d.day))
+        .toSet().toList()..sort((a, b) => b.compareTo(a));
+    int s = 1;
     for (int i = 1; i < dias.length; i++) {
-      if (dias[i - 1].difference(dias[i]).inDays == 1) {
-        seq++;
-      } else {
-        break;
-      }
+      if (dias[i-1].difference(dias[i]).inDays == 1) s++; else break;
     }
-    return seq;
+    return s;
   }
 
   int _locaisUnicos() => _registros
       .map((r) => r.local.trim().toLowerCase())
-      .where((l) => l.isNotEmpty)
-      .toSet()
-      .length;
+      .where((l) => l.isNotEmpty).toSet().length;
 }
 
-// ─── Modelo auxiliar ─────────────────────────────────────────────────────────
-class _AlbumData {
-  final String   name;
-  final IconData icon;
-  final bool     active;
-  const _AlbumData(this.name, this.icon, this.active);
+class _SectionHead extends StatelessWidget {
+  final String title;
+  const _SectionHead(this.title);
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.fromLTRB(16, 20, 16, 0),
+    child: Text(title, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700,
+        color: kTextTertiary, letterSpacing: 0.5)),
+  );
 }
