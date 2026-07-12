@@ -45,6 +45,7 @@ class AlbunsScreen extends StatefulWidget {
 
 class _AlbunsScreenState extends State<AlbunsScreen> {
   List<Album> _albuns = [];
+  Map<int, int> _contagens = {};
   bool _loading = true;
 
   @override
@@ -52,8 +53,10 @@ class _AlbunsScreenState extends State<AlbunsScreen> {
 
   Future<void> _load() async {
     setState(() => _loading = true);
-    final a = await DatabaseHelper.instance.listarAlbuns();
-    if (mounted) setState(() { _albuns = a; _loading = false; });
+    final db = DatabaseHelper.instance;
+    final a = await db.listarAlbuns();
+    final c = await db.contagemRegistrosPorAlbum();
+    if (mounted) setState(() { _albuns = a; _contagens = c; _loading = false; });
   }
 
   void _openCreate() {
@@ -145,6 +148,7 @@ class _AlbunsScreenState extends State<AlbunsScreen> {
                     separatorBuilder: (_, __) => const SizedBox(height: 10),
                     itemBuilder: (_, i) => _AlbumRow(
                       album: _albuns[i],
+                      totalMomentos: _contagens[_albuns[i].id] ?? 0,
                       onTap: () => Future.microtask(() async {
                         if (!mounted) return;
                         await Navigator.push(context, MaterialPageRoute(
@@ -163,9 +167,10 @@ class _AlbunsScreenState extends State<AlbunsScreen> {
 // ── Album row ─────────────────────────────────────────────────────────────────
 class _AlbumRow extends StatelessWidget {
   final Album album;
+  final int totalMomentos;
   final VoidCallback onTap, onEdit, onDelete;
-  const _AlbumRow({required this.album, required this.onTap,
-      required this.onEdit, required this.onDelete});
+  const _AlbumRow({required this.album, required this.totalMomentos,
+      required this.onTap, required this.onEdit, required this.onDelete});
 
   @override
   Widget build(BuildContext context) {
@@ -187,6 +192,12 @@ class _AlbumRow extends StatelessWidget {
           Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text(album.nome,
                 style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: _t1)),
+            Text(
+              totalMomentos == 1
+                  ? '1 momento'
+                  : '$totalMomentos momentos',
+              style: const TextStyle(fontSize: 12, color: _t2),
+            ),
             if (album.descricao.isNotEmpty)
               Text(album.descricao,
                   style: const TextStyle(fontSize: 12, color: _t2),

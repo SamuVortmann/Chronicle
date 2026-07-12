@@ -5,6 +5,7 @@ import 'package:travel/database/database_helper.dart';
 import 'package:travel/screens/albuns_screen.dart';
 import 'package:travel/screens/album_detail_screen.dart';
 import 'package:travel/screens/novo_registro_screen.dart';
+import 'package:travel/screens/registro_detail_screen.dart';
 
 const _green     = Color(0xFF2E9E50);
 const _greenLight = Color(0xFFE6F4EC);
@@ -128,13 +129,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   else
                     ...(_recentes.map((r) => _MomentTile(
                       registro: r,
-                      onTap: () => _go(AlbumDetailScreen(
-                        album: Album(
-                          id: r.albumId,
-                          nome: r.album.isNotEmpty ? r.album : 'Sem álbum',
-                          criadoEm: r.dataHora,
-                        ),
-                      )),
+                      onTap: () => _go(RegistroDetailScreen(registro: r)),
                     ))),
                 ],
               ),

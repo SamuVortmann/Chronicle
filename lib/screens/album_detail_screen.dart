@@ -37,7 +37,7 @@ class AlbumDetailScreen extends StatefulWidget {
 }
 
 class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
-  List<dynamic> _momentos = [];
+  List<Registro> _momentos = [];
   bool _loading = true;
   late Album _album;
 
@@ -46,7 +46,10 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
 
   Future<void> _load() async {
     setState(() => _loading = true);
-    final list = await DatabaseHelper.instance.listarRegistros();
+    final id = _album.id;
+    final list = id != null
+        ? await DatabaseHelper.instance.listarRegistrosPorAlbum(id)
+        : <Registro>[];
     if (mounted) setState(() { _momentos = list; _loading = false; });
   }
 
@@ -59,7 +62,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
     });
   }
 
-  void _openMomento(dynamic r) {
+  void _openMomento(Registro r) {
     Future.microtask(() async {
       if (!mounted) return;
       await Navigator.push(context, MaterialPageRoute(
@@ -96,7 +99,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
                   Container(width: 72, height: 72,
                       decoration: BoxDecoration(color: bg,
                           borderRadius: BorderRadius.circular(18)),
-                      child: Icon(_icons[(_album as dynamic).icone] ?? Icons.photo_album_outlined,
+                      child: Icon(_icons[_album.icone] ?? Icons.photo_album_outlined,
                           size: 36, color: color)),
                   const SizedBox(height: 16),
                   const Text('Nenhum momento ainda',
@@ -137,7 +140,7 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
 
 // ── Momento card ──────────────────────────────────────────────────────────────
 class _MomentoCard extends StatelessWidget {
-  final dynamic registro;
+  final Registro registro;
   final VoidCallback onTap;
   const _MomentoCard({required this.registro, required this.onTap});
 

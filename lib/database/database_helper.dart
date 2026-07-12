@@ -173,7 +173,7 @@ class DatabaseHelper {
 
     return openDatabase(
       path,
-      version: 2,          // bump this number when you change the schema
+      version: 3,          // bump this number when you change the schema
       onCreate:  _onCreate, // called when DB is created for the first time
       onUpgrade: _onUpgrade,// called when version number increases
       onOpen: (db) => db.execute('PRAGMA foreign_keys = ON'), // enable FK enforcement
@@ -200,6 +200,16 @@ class DatabaseHelper {
       } catch (_) {
         // Ignore error if column already exists
       }
+    }
+    if (oldVersion < 3) {
+      // Link legacy moments to albums by matching the stored album name
+      await db.execute('''
+        UPDATE registros
+        SET album_id = (
+          SELECT id FROM albuns WHERE albuns.nome = registros.album LIMIT 1
+        )
+        WHERE album_id IS NULL AND album != ''
+      ''');
     }
   }
 
@@ -268,9 +278,15 @@ class DatabaseHelper {
     return rows.map(Album.fromMap).toList();
   }
 
-  Future<void> atualizarAlbum(Album a) async =>
-      (await database).update('albuns', a.toMap(),
+  Future<void> atualizarAlbum(Album a) async {
+    final db = await database;
+    await db.transaction((txn) async {
+      await txn.update('albuns', a.toMap(),
           where: 'id = ?', whereArgs: [a.id]);
+      await txn.update('registros', {'album': a.nome},
+          where: 'album_id = ?', whereArgs: [a.id]);
+    });
+  }
 
   Future<void> deletarAlbum(int id) async =>
       (await database).delete('albuns', where: 'id = ?', whereArgs: [id]);
@@ -279,6 +295,16 @@ class DatabaseHelper {
     final res = await (await database).rawQuery(
         'SELECT COUNT(*) as c FROM registros WHERE album_id = ?', [albumId]);
     return (res.first['c'] as int?) ?? 0;
+  }
+
+  Future<Map<int, int>> contagemRegistrosPorAlbum() async {
+    final rows = await (await database).rawQuery(
+        'SELECT album_id, COUNT(*) as c FROM registros '
+        'WHERE album_id IS NOT NULL GROUP BY album_id');
+    return {
+      for (final row in rows)
+        row['album_id'] as int: (row['c'] as int?) ?? 0,
+    };
   }
 
   Future<List<Registro>> listarRegistrosPorAlbum(int albumId) async {
