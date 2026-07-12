@@ -1,42 +1,40 @@
-// lib/database/database_helper.dart
+import 'dart:io';                              // needed for Platform.isWindows etc.
+import 'package:flutter/foundation.dart';      // needed for kIsWeb
+import 'package:path/path.dart';               // helps build file paths
+import 'package:sqflite/sqflite.dart';         // the SQLite plugin
+import 'package:sqflite_common_ffi/sqflite_ffi.dart'; // SQLite for Desktop
+
+// ============================================================
+// MODEL: Album
 //
-// Fixes vs. the version in the RAR:
-//  1. listarAlbuns() was a stub returning Future<Object?> — now fully implemented
-//  2. Album model added (was missing entirely)
-//  3. album_id FK column added to registros (with migration from v1 → v2)
-//  4. initFfiIfNeeded() correctly guards Android/iOS (no FFI there)
-//  5. Foreign-key PRAGMA enabled so ON DELETE CASCADE actually fires on Android
-//  6. All fromMap casts use null-safe fallbacks (no more type-cast crashes)
-//  7. Removed sqflite_common_ffi import guard — it's only referenced inside
-//     the Platform.is* branch so it compiles fine on mobile too
-
-import 'dart:io';
-import 'package:flutter/foundation.dart';
-import 'package:path/path.dart';
-import 'package:sqflite/sqflite.dart';
-import 'package:sqflite_common_ffi/sqflite_ffi.dart';
-
-// ─── Models ───────────────────────────────────────────────────────────────────
-
+// A "model" is just a Dart class that represents one row
+// in a database table. Think of it like a spreadsheet row.
+//
+// Our albuns table has these columns:
+//   id, nome, descricao, icone, cor, criado_em
+// ============================================================
 class Album {
-  final int?   id;
-  final String nome;
-  final String descricao;
-  final String icone;    // key into kIconMap, e.g. 'snowflake'
-  final String cor;      // hex string, e.g. '#2E9E50'
-  final String criadoEm; // ISO-8601
+  final int?   id;         // null when not yet saved to DB
+  final String nome;       // album name, e.g. "Viagem para Paris"
+  final String descricao;  // optional description
+  final String icone;      // icon name, e.g. "snowflake", "flight"
+  final String cor;        // hex color, e.g. "#2E9E50"
+  final String criadoEm;   // creation date in ISO format
 
+  // "const" constructor = can be created at compile time (slightly faster)
   const Album({
-    this.id,
-    required this.nome,
-    this.descricao = '',
+    this.id,               // optional — null means "not in DB yet"
+    required this.nome,    // required = must be provided
+    this.descricao = '',   // default value = empty string
     this.icone     = 'photo_album',
     this.cor       = '#2E9E50',
     required this.criadoEm,
   });
 
+  // toMap() converts this object into a Map (like a dictionary).
+  // SQLite needs Maps to insert/update rows.
   Map<String, dynamic> toMap() => {
-    if (id != null) 'id': id,
+    if (id != null) 'id': id,  // only include id if it exists
     'nome':      nome,
     'descricao': descricao,
     'icone':     icone,
@@ -44,6 +42,9 @@ class Album {
     'criado_em': criadoEm,
   };
 
+  // factory constructor = a special constructor that returns an Album.
+  // fromMap() is the reverse of toMap() — turns a DB row into an Album object.
+  // The "?? ''" means: if the value is null, use '' instead (safe fallback).
   factory Album.fromMap(Map<String, dynamic> m) => Album(
     id:        m['id']        as int?,
     nome:      (m['nome']      as String?) ?? '',
@@ -53,26 +54,39 @@ class Album {
     criadoEm:  (m['criado_em'] as String?) ?? DateTime.now().toIso8601String(),
   );
 
-  Album copyWith({String? nome, String? descricao, String? icone, String? cor}) => Album(
-    id: id, criadoEm: criadoEm,
-    nome:      nome      ?? this.nome,
-    descricao: descricao ?? this.descricao,
-    icone:     icone     ?? this.icone,
-    cor:       cor       ?? this.cor,
-  );
+  // copyWith() returns a NEW Album with some fields changed.
+  // Useful for editing — keeps fields you don't change the same.
+  Album copyWith({String? nome, String? descricao, String? icone, String? cor}) =>
+      Album(
+        id: id, criadoEm: criadoEm,
+        nome:      nome      ?? this.nome,
+        descricao: descricao ?? this.descricao,
+        icone:     icone     ?? this.icone,
+        cor:       cor       ?? this.cor,
+      );
 }
 
+// ============================================================
+// MODEL: Registro (a "moment" saved inside an album)
+//
+// Our registros table columns:
+//   id, album_id, titulo, descricao, local, data_hora,
+//   humor, tags, album
+//
+// Photos are stored in a SEPARATE table (fotos) and loaded
+// alongside the registro. That's why fotos is a List<String>.
+// ============================================================
 class Registro {
   final int?         id;
-  final int?         albumId;   // FK → albuns.id  (nullable)
-  final String       titulo;
+  final int?         albumId;   // which album this belongs to (can be null)
+  final String       titulo;    // e.g. "Pôr do sol na praia"
   final String       descricao;
-  final String       local;
-  final String       dataHora;  // ISO-8601
-  final int          humor;     // 0-4
-  final String       tags;      // CSV: "Viagem,Natureza"
-  final String       album;     // denormalized album name for quick display
-  final List<String> fotos;     // absolute file paths on device
+  final String       local;     // e.g. "Florianópolis"
+  final String       dataHora;  // ISO-8601 date string
+  final int          humor;     // 0=😊 1=😄 2=😐 3=😢 4=😍
+  final String       tags;      // not used for now, kept for future
+  final String       album;     // album name saved here too (for quick display)
+  final List<String> fotos;     // list of file paths to photos on the device
 
   const Registro({
     this.id,
@@ -84,7 +98,7 @@ class Registro {
     required this.humor,
     required this.tags,
     required this.album,
-    this.fotos = const [],
+    this.fotos = const [], // default = no photos
   });
 
   Map<String, dynamic> toMap() => {
@@ -99,80 +113,101 @@ class Registro {
     'album':     album,
   };
 
-  factory Registro.fromMap(Map<String, dynamic> m, List<String> fotos) => Registro(
-    id:        m['id']        as int?,
-    albumId:   m['album_id']  as int?,
-    titulo:    (m['titulo']    as String?) ?? '',
-    descricao: (m['descricao'] as String?) ?? '',
-    local:     (m['local']     as String?) ?? '',
-    dataHora:  (m['data_hora'] as String?) ?? DateTime.now().toIso8601String(),
-    humor:     (m['humor']     as int?)    ?? 0,
-    tags:      (m['tags']      as String?) ?? '',
-    album:     (m['album']     as String?) ?? '',
-    fotos:     fotos,
-  );
-
-  List<String> get tagList =>
-      tags.isEmpty ? [] : tags.split(',').map((t) => t.trim()).where((t) => t.isNotEmpty).toList();
+  factory Registro.fromMap(Map<String, dynamic> m, List<String> fotos) =>
+      Registro(
+        id:        m['id']        as int?,
+        albumId:   m['album_id']  as int?,
+        titulo:    (m['titulo']    as String?) ?? '',
+        descricao: (m['descricao'] as String?) ?? '',
+        local:     (m['local']     as String?) ?? '',
+        dataHora:  (m['data_hora'] as String?) ?? DateTime.now().toIso8601String(),
+        humor:     (m['humor']     as int?)    ?? 0,
+        tags:      (m['tags']      as String?) ?? '',
+        album:     (m['album']     as String?) ?? '',
+        fotos:     fotos,
+      );
 }
 
-// ─── DatabaseHelper ───────────────────────────────────────────────────────────
-
+// ============================================================
+// DATABASE HELPER
+//
+// This is a SINGLETON — there is only ONE instance of this
+// class in the entire app. We access it via DatabaseHelper.instance
+//
+// Why singleton? Because you should only have one connection
+// to a SQLite database at a time.
+// ============================================================
 class DatabaseHelper {
+  // Private constructor — nobody can do "DatabaseHelper()" from outside
   DatabaseHelper._();
+
+  // The single instance, created once and reused everywhere
   static final DatabaseHelper instance = DatabaseHelper._();
+
+  // The actual database object — null until first use
   static Database? _db;
 
-  /// Call once in main() before runApp().
-  /// Android & iOS use the native sqflite engine and do NOT need FFI.
+  // ── Platform setup ──────────────────────────────────────────
+  // On Android/iOS: sqflite works out of the box, no setup needed.
+  // On Windows/Linux/macOS: we need to use the FFI (desktop) version.
   static void initFfiIfNeeded() {
-    if (kIsWeb || (!kIsWeb && (Platform.isWindows || Platform.isLinux || Platform.isMacOS))) {
-      sqfliteFfiInit();
-      databaseFactory = databaseFactoryFfi;
+    if (kIsWeb || Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
+      sqfliteFfiInit();                      // initialize the desktop SQLite
+      databaseFactory = databaseFactoryFfi;  // tell sqflite to use it
     }
-    // Android & iOS: do nothing — sqflite uses the platform channel natively.
+    // On mobile (Android, iOS) — do nothing. sqflite handles it automatically.
   }
 
+  // ── Database getter ─────────────────────────────────────────
+  // "get database" is a getter — accessed like a property: DatabaseHelper.instance.database
+  // "_db ??= ..." means: if _db is null, initialize it. Otherwise, return it.
   Future<Database> get database async {
     _db ??= await _initDb();
-    return _db!;
+    return _db!; // the "!" tells Dart: trust me, this is not null
   }
 
+  // Opens the database file (creates it if it doesn't exist yet)
   Future<Database> _initDb() async {
-    final dir  = await getDatabasesPath();
-    final path = join(dir, 'chronicle.db');
+    final dir  = await getDatabasesPath(); // gets the app's data folder
+    final path = join(dir, 'chronicle.db'); // builds the full file path
 
     return openDatabase(
       path,
-      version: 2,
-      onCreate:  _onCreate,
-      onUpgrade: _onUpgrade,
-      // Required so ON DELETE CASCADE actually works on Android/iOS SQLite
-      onOpen: (db) => db.execute('PRAGMA foreign_keys = ON'),
+      version: 2,          // bump this number when you change the schema
+      onCreate:  _onCreate, // called when DB is created for the first time
+      onUpgrade: _onUpgrade,// called when version number increases
+      onOpen: (db) => db.execute('PRAGMA foreign_keys = ON'), // enable FK enforcement
     );
   }
 
+  // Called once when the database is brand new
   Future<void> _onCreate(Database db, int version) async {
-    await _createAlbuns(db);
-    await _createRegistros(db);
-    await _createFotos(db);
-    await _seedAlbuns(db);
+    await _createTableAlbuns(db);
+    await _createTableRegistros(db);
+    await _createTableFotos(db);
+    await _seedDefaultAlbums(db); // add 4 starter albums
   }
 
-  Future<void> _onUpgrade(Database db, int old, int newV) async {
-    if (old < 2) {
-      // v1 had no albuns table and no album_id column
-      await _createAlbuns(db);
-      await _seedAlbuns(db);
+  // Called when we increase the version number (schema migration)
+  Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
+    if (oldVersion < 2) {
+      // Version 1 didn't have the albuns table
+      await _createTableAlbuns(db);
+      await _seedDefaultAlbums(db);
       try {
+        // Add the album_id column to existing registros table
         await db.execute('ALTER TABLE registros ADD COLUMN album_id INTEGER');
       } catch (_) {
-        // column may already exist if partial migration happened
+        // Ignore error if column already exists
       }
     }
   }
 
-  Future<void> _createAlbuns(Database db) => db.execute('''
+  // ── Table creation SQL ──────────────────────────────────────
+  // Each of these creates one table in the database.
+  // "IF NOT EXISTS" prevents errors if the table already exists.
+
+  Future<void> _createTableAlbuns(Database db) => db.execute('''
     CREATE TABLE IF NOT EXISTS albuns (
       id         INTEGER PRIMARY KEY AUTOINCREMENT,
       nome       TEXT    NOT NULL,
@@ -183,7 +218,7 @@ class DatabaseHelper {
     )
   ''');
 
-  Future<void> _createRegistros(Database db) => db.execute('''
+  Future<void> _createTableRegistros(Database db) => db.execute('''
     CREATE TABLE IF NOT EXISTS registros (
       id        INTEGER PRIMARY KEY AUTOINCREMENT,
       album_id  INTEGER,
@@ -198,7 +233,8 @@ class DatabaseHelper {
     )
   ''');
 
-  Future<void> _createFotos(Database db) => db.execute('''
+  // Fotos are stored separately so one registro can have many photos
+  Future<void> _createTableFotos(Database db) => db.execute('''
     CREATE TABLE IF NOT EXISTS fotos (
       id           INTEGER PRIMARY KEY AUTOINCREMENT,
       registro_id  INTEGER NOT NULL,
@@ -207,7 +243,8 @@ class DatabaseHelper {
     )
   ''');
 
-  Future<void> _seedAlbuns(Database db) async {
+  // Insert 4 starter albums so new users have something to see
+  Future<void> _seedDefaultAlbums(Database db) async {
     final now = DateTime.now().toIso8601String();
     for (final a in [
       {'nome': 'Inverno',   'icone': 'snowflake',     'cor': '#5B8DEF'},
@@ -215,30 +252,25 @@ class DatabaseHelper {
       {'nome': 'Outono',    'icone': 'eco',           'cor': '#E07B39'},
       {'nome': 'Primavera', 'icone': 'local_florist', 'cor': '#2E9E50'},
     ]) {
-      await db.insert('albuns', {
-        'nome': a['nome'], 'descricao': '',
-        'icone': a['icone'], 'cor': a['cor'], 'criado_em': now,
-      });
+      await db.insert('albuns', {...a, 'descricao': '', 'criado_em': now});
     }
   }
 
-  // ── Album CRUD ─────────────────────────────────────────────────────────────
+  // ── ALBUM CRUD ──────────────────────────────────────────────
+  // CRUD = Create, Read, Update, Delete — the 4 basic DB operations
 
   Future<int> inserirAlbum(Album a) async =>
       (await database).insert('albuns', a.toMap());
 
   Future<List<Album>> listarAlbuns() async {
     final rows = await (await database).query('albuns', orderBy: 'criado_em ASC');
+    // .map() transforms each row (Map) into an Album object
     return rows.map(Album.fromMap).toList();
   }
 
-  Future<Album?> buscarAlbum(int id) async {
-    final rows = await (await database).query('albuns', where: 'id = ?', whereArgs: [id]);
-    return rows.isEmpty ? null : Album.fromMap(rows.first);
-  }
-
   Future<void> atualizarAlbum(Album a) async =>
-      (await database).update('albuns', a.toMap(), where: 'id = ?', whereArgs: [a.id]);
+      (await database).update('albuns', a.toMap(),
+          where: 'id = ?', whereArgs: [a.id]);
 
   Future<void> deletarAlbum(int id) async =>
       (await database).delete('albuns', where: 'id = ?', whereArgs: [id]);
@@ -252,19 +284,22 @@ class DatabaseHelper {
   Future<List<Registro>> listarRegistrosPorAlbum(int albumId) async {
     final db   = await database;
     final rows = await db.query('registros',
-        where: 'album_id = ?', whereArgs: [albumId], orderBy: 'data_hora DESC');
-    return _hydrateRows(db, rows);
+        where: 'album_id = ?', whereArgs: [albumId],
+        orderBy: 'data_hora DESC');
+    return _addPhotos(db, rows);
   }
 
-  // ── Registro CRUD ──────────────────────────────────────────────────────────
+  // ── REGISTRO CRUD ───────────────────────────────────────────
 
   Future<int> inserirRegistro(Registro r) async {
-    final db = await database;
+    final db  = await database;
     int newId = 0;
+    // transaction = all-or-nothing: if anything fails, nothing is saved
     await db.transaction((txn) async {
       newId = await txn.insert('registros', r.toMap());
-      for (final p in r.fotos) {
-        await txn.insert('fotos', {'registro_id': newId, 'caminho': p});
+      // Insert each photo path into the fotos table
+      for (final path in r.fotos) {
+        await txn.insert('fotos', {'registro_id': newId, 'caminho': path});
       }
     });
     return newId;
@@ -273,23 +308,26 @@ class DatabaseHelper {
   Future<List<Registro>> listarRegistros() async {
     final db   = await database;
     final rows = await db.query('registros', orderBy: 'data_hora DESC');
-    return _hydrateRows(db, rows);
+    return _addPhotos(db, rows);
   }
 
   Future<Registro?> buscarRegistro(int id) async {
     final db   = await database;
     final rows = await db.query('registros', where: 'id = ?', whereArgs: [id]);
     if (rows.isEmpty) return null;
-    return Registro.fromMap(rows.first, await _fotosDe(db, id));
+    final fotos = await _fotosDoRegistro(db, id);
+    return Registro.fromMap(rows.first, fotos);
   }
 
   Future<void> atualizarRegistro(Registro r) async {
     final db = await database;
     await db.transaction((txn) async {
-      await txn.update('registros', r.toMap(), where: 'id = ?', whereArgs: [r.id]);
+      await txn.update('registros', r.toMap(),
+          where: 'id = ?', whereArgs: [r.id]);
+      // Delete old photos then re-insert the new list
       await txn.delete('fotos', where: 'registro_id = ?', whereArgs: [r.id]);
-      for (final p in r.fotos) {
-        await txn.insert('fotos', {'registro_id': r.id, 'caminho': p});
+      for (final path in r.fotos) {
+        await txn.insert('fotos', {'registro_id': r.id, 'caminho': path});
       }
     });
   }
@@ -298,23 +336,27 @@ class DatabaseHelper {
       (await database).delete('registros', where: 'id = ?', whereArgs: [id]);
 
   Future<int> totalRegistros() async {
-    final res = await (await database).rawQuery('SELECT COUNT(*) as c FROM registros');
+    final res = await (await database)
+        .rawQuery('SELECT COUNT(*) as c FROM registros');
     return (res.first['c'] as int?) ?? 0;
   }
 
-  // ── Helpers ────────────────────────────────────────────────────────────────
+  // ── Private helpers ─────────────────────────────────────────
 
-  Future<List<Registro>> _hydrateRows(Database db, List<Map<String, dynamic>> rows) async {
+  // Takes a list of DB rows and loads photos for each registro
+  Future<List<Registro>> _addPhotos(
+      Database db, List<Map<String, dynamic>> rows) async {
     final result = <Registro>[];
     for (final row in rows) {
       final id    = row['id'] as int;
-      final fotos = await _fotosDe(db, id);
+      final fotos = await _fotosDoRegistro(db, id);
       result.add(Registro.fromMap(row, fotos));
     }
     return result;
   }
 
-  Future<List<String>> _fotosDe(Database db, int registroId) async {
+  // Gets all photo paths for one registro
+  Future<List<String>> _fotosDoRegistro(Database db, int registroId) async {
     final rows = await db.query('fotos',
         where: 'registro_id = ?', whereArgs: [registroId]);
     return rows.map((r) => r['caminho'] as String).toList();

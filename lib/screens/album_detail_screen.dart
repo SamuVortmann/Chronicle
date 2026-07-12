@@ -1,11 +1,33 @@
 // lib/screens/album_detail_screen.dart
-
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:travel/database/database_helper.dart';
-import 'package:travel/utils/app_constants.dart';
 import 'package:travel/screens/novo_registro_screen.dart';
 import 'package:travel/screens/registro_detail_screen.dart';
+
+const _green      = Color(0xFF2E9E50);
+const _greenLight = Color(0xFFE6F4EC);
+const _bg         = Color(0xFFF2F2F7);
+const _card       = Color(0xFFFFFFFF);
+const _border     = Color(0xFFE5E5EA);
+const _t1         = Color(0xFF1C1C1E);
+const _t2         = Color(0xFF6C6C70);
+const _t3         = Color(0xFFAEAEB2);
+
+Color _hex(String h) {
+  try { return Color(int.parse('FF${h.replaceAll('#','')}', radix: 16)); }
+  catch (_) { return _green; }
+}
+
+const _icons = <String, IconData>{
+  'photo_album': Icons.photo_album_outlined,
+  'snowflake': Icons.ac_unit, 'wb_sunny': Icons.wb_sunny_outlined,
+  'eco': Icons.eco_outlined, 'local_florist': Icons.local_florist_outlined,
+  'flight': Icons.flight_outlined, 'restaurant': Icons.restaurant_outlined,
+  'favorite': Icons.favorite_outline, 'camera': Icons.camera_alt_outlined,
+  'home': Icons.home_outlined, 'star': Icons.star_outline,
+  'music_note': Icons.music_note_outlined,
+};
 
 class AlbumDetailScreen extends StatefulWidget {
   final Album album;
@@ -15,7 +37,7 @@ class AlbumDetailScreen extends StatefulWidget {
 }
 
 class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
-  List<Registro> _registros = [];
+  List<dynamic> _momentos = [];
   bool _loading = true;
   late Album _album;
 
@@ -24,156 +46,160 @@ class _AlbumDetailScreenState extends State<AlbumDetailScreen> {
 
   Future<void> _load() async {
     setState(() => _loading = true);
-    try {
-      final r = await DatabaseHelper.instance.listarRegistrosPorAlbum(_album.id!);
-      if (mounted) setState(() { _registros = r; _loading = false; });
-    } catch (e) {
-      if (mounted) { setState(() => _loading = false); showError(context, e.toString()); }
-    }
+    final list = await DatabaseHelper.instance.listarRegistros();
+    if (mounted) setState(() { _momentos = list; _loading = false; });
+  }
+
+  void _addMomento() {
+    Future.microtask(() async {
+      if (!mounted) return;
+      await Navigator.push(context, MaterialPageRoute(
+          builder: (_) => NovoRegistroScreen(albumPreSelecionado: _album)));
+      if (mounted) _load();
+    });
+  }
+
+  void _openMomento(dynamic r) {
+    Future.microtask(() async {
+      if (!mounted) return;
+      await Navigator.push(context, MaterialPageRoute(
+          builder: (_) => RegistroDetailScreen(registro: r)));
+      if (mounted) _load();
+    });
   }
 
   @override
   Widget build(BuildContext context) {
-    final color = hexToColor(_album.cor);
-    final light = Color.alphaBlend(color.withOpacity(0.12), Colors.white);
+    final color = _hex(_album.cor);
+    final bg    = Color.alphaBlend(color.withValues(alpha: 0.12), Colors.white);
 
     return Scaffold(
-      backgroundColor: kBg,
-      body: CustomScrollView(slivers: [
-        // ── SliverAppBar with album color ──
-        SliverAppBar(
-          expandedHeight: 160,
-          pinned: true,
-          backgroundColor: color,
-          foregroundColor: Colors.white,
-          actions: [
-            IconButton(
-              icon: const Icon(Icons.add, color: Colors.white),
-              onPressed: () async {
-                final ok = await Navigator.push<bool>(context,
-                    MaterialPageRoute(builder: (_) => const NovoRegistroScreen()));
-                if (ok == true) _load();
-              },
-            ),
-          ],
-          flexibleSpace: FlexibleSpaceBar(
-            background: Container(
-              color: light,
-              child: Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-                const SizedBox(height: 40),
-                Icon(iconFromString(_album.icone), size: 52, color: color),
-                const SizedBox(height: 8),
-                Text(_album.nome, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w700, color: kTextPrimary)),
-                if (_album.descricao.isNotEmpty)
-                  Padding(padding: const EdgeInsets.symmetric(horizontal: 24),
-                      child: Text(_album.descricao, style: const TextStyle(fontSize: 12, color: kTextSecondary),
-                          textAlign: TextAlign.center, maxLines: 2, overflow: TextOverflow.ellipsis)),
-              ])),
-            ),
-            title: Text(_album.nome, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 16)),
-            titlePadding: const EdgeInsets.only(left: 56, bottom: 14),
+      backgroundColor: _bg,
+      appBar: AppBar(
+        backgroundColor: color,
+        foregroundColor: Colors.white,
+        elevation: 0,
+        title: Text(_album.nome,
+            style: const TextStyle(fontWeight: FontWeight.w700, color: Colors.white)),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.add, color: Colors.white),
+            tooltip: 'Novo momento',
+            onPressed: _addMomento,
           ),
-        ),
-
-        // ── Stats bar ──
-        SliverToBoxAdapter(child: Container(
-          color: kCard,
-          padding: const EdgeInsets.symmetric(vertical: 12),
-          child: Row(mainAxisAlignment: MainAxisAlignment.spaceAround, children: [
-            _statItem('${_registros.length}', 'Registros'),
-            _divider(),
-            _statItem('${_registros.where((r) => r.fotos.isNotEmpty).length}', 'Com fotos'),
-            _divider(),
-            _statItem(_registros.isNotEmpty ? formatDateShort(_registros.last.dataHora) : '--', 'Primeiro'),
-          ]),
-        )),
-        const SliverToBoxAdapter(child: SizedBox(height: 8)),
-
-        // ── Entries ──
-        _loading
-            ? const SliverFillRemaining(child: Center(child: CircularProgressIndicator(color: kGreen)))
-            : _registros.isEmpty
-                ? SliverFillRemaining(child: EmptyState(
-                    icon: Icons.camera_alt_outlined,
-                    title: 'Álbum vazio',
-                    subtitle: 'Adicione um registro e selecione este álbum.',
-                    actionLabel: 'Adicionar registro',
-                    onAction: () async {
-                      final ok = await Navigator.push<bool>(context,
-                          MaterialPageRoute(builder: (_) => const NovoRegistroScreen()));
-                      if (ok == true) _load();
-                    },
-                  ))
-                : SliverPadding(
-                    padding: const EdgeInsets.fromLTRB(12, 0, 12, 80),
-                    sliver: SliverList(delegate: SliverChildBuilderDelegate(
-                      (_, i) => _registroCard(_registros[i]),
-                      childCount: _registros.length,
-                    )),
+        ],
+      ),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator(color: _green))
+          : _momentos.isEmpty
+              ? Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
+                  Container(width: 72, height: 72,
+                      decoration: BoxDecoration(color: bg,
+                          borderRadius: BorderRadius.circular(18)),
+                      child: Icon(_icons[(_album as dynamic).icone] ?? Icons.photo_album_outlined,
+                          size: 36, color: color)),
+                  const SizedBox(height: 16),
+                  const Text('Nenhum momento ainda',
+                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: _t1)),
+                  const SizedBox(height: 6),
+                  const Text('Toque em + para adicionar o primeiro.',
+                      style: TextStyle(color: _t2)),
+                  const SizedBox(height: 20),
+                  GestureDetector(
+                    onTap: _addMomento,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 24, vertical: 12),
+                      decoration: BoxDecoration(color: color,
+                          borderRadius: BorderRadius.circular(10)),
+                      child: const Text('Adicionar momento',
+                          style: TextStyle(color: Colors.white,
+                              fontWeight: FontWeight.w600)),
+                    ),
                   ),
-      ]),
+                ]))
+              : RefreshIndicator(
+                  color: _green,
+                  onRefresh: _load,
+                  child: ListView.separated(
+                    padding: const EdgeInsets.all(16),
+                    itemCount: _momentos.length,
+                    separatorBuilder: (_, _) => const SizedBox(height: 10),
+                    itemBuilder: (_, i) => _MomentoCard(
+                      registro: _momentos[i],
+                      onTap: () => _openMomento(_momentos[i]),
+                    ),
+                  ),
+                ),
     );
   }
+}
 
-  Widget _statItem(String value, String label) => Column(children: [
-    Text(value, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: kTextPrimary)),
-    const SizedBox(height: 2),
-    Text(label, style: const TextStyle(fontSize: 11, color: kTextTertiary)),
-  ]);
+// ── Momento card ──────────────────────────────────────────────────────────────
+class _MomentoCard extends StatelessWidget {
+  final dynamic registro;
+  final VoidCallback onTap;
+  const _MomentoCard({required this.registro, required this.onTap});
 
-  Widget _divider() => Container(height: 32, width: 1, color: kBorder);
+  String _fmt(String iso) {
+    final dt = DateTime.tryParse(iso);
+    if (dt == null) return '';
+    const m = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
+    final h = dt.hour.toString().padLeft(2,'0');
+    final min = dt.minute.toString().padLeft(2,'0');
+    return '${dt.day} ${m[dt.month-1]} ${dt.year} · $h:$min';
+  }
 
-  Widget _registroCard(Registro r) {
-    final temFoto = r.fotos.isNotEmpty && File(r.fotos.first).existsSync();
+  @override
+  Widget build(BuildContext context) {
+    final r        = registro;
+    final hasPhoto = r.fotos.isNotEmpty && File(r.fotos.first).existsSync();
+    const moods    = ['😊','😄','😐','😢','😍'];
+
     return GestureDetector(
-      onTap: () => Navigator.push(context,
-          MaterialPageRoute(builder: (_) => RegistroDetailScreen(registro: r))).then((_) => _load()),
+      onTap: onTap,
       child: Container(
-        margin: const EdgeInsets.only(bottom: 10),
-        decoration: BoxDecoration(color: kCard, borderRadius: BorderRadius.circular(14), border: Border.all(color: kBorder)),
-        child: Row(children: [
-          // Foto ou placeholder
-          Container(
-            width: 72, height: 72,
-            decoration: BoxDecoration(
-              color: temFoto ? Colors.transparent : kGreenLight,
-              borderRadius: const BorderRadius.horizontal(left: Radius.circular(13)),
-              border: const Border(right: BorderSide(color: kBorderLight)),
+        decoration: BoxDecoration(color: _card,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: _border)),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          // Photo
+          if (hasPhoto)
+            ClipRRect(
+              borderRadius: const BorderRadius.vertical(top: Radius.circular(13)),
+              child: Image.file(File(r.fotos.first),
+                  width: double.infinity, height: 160, fit: BoxFit.cover),
             ),
-            child: temFoto
-                ? ClipRRect(borderRadius: const BorderRadius.horizontal(left: Radius.circular(13)),
-                    child: Image.file(File(r.fotos.first), fit: BoxFit.cover,
-                        errorBuilder: (_, __, ___) => const Icon(Icons.broken_image_outlined, color: kTextTertiary)))
-                : const Icon(Icons.camera_alt_outlined, size: 28, color: kGreen),
-          ),
-          Expanded(child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          Padding(
+            padding: const EdgeInsets.all(12),
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
                 Expanded(child: Text(r.titulo,
-                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: kTextPrimary),
+                    style: const TextStyle(fontSize: 15,
+                        fontWeight: FontWeight.w700, color: _t1),
                     maxLines: 1, overflow: TextOverflow.ellipsis)),
-                Text(kMoods[r.humor.clamp(0, 4)], style: const TextStyle(fontSize: 15)),
+                Text(moods[r.humor.clamp(0, 4)],
+                    style: const TextStyle(fontSize: 18)),
               ]),
-              const SizedBox(height: 3),
-              if (r.local.isNotEmpty) Row(children: [
-                const Icon(Icons.location_on_outlined, size: 12, color: kTextTertiary),
-                const SizedBox(width: 3),
-                Text(r.local, style: const TextStyle(fontSize: 11, color: kTextSecondary),
-                    maxLines: 1, overflow: TextOverflow.ellipsis),
-              ]),
-              const SizedBox(height: 3),
-              Text(formatDate(r.dataHora), style: const TextStyle(fontSize: 11, color: kTextTertiary)),
-              if (r.tagList.isNotEmpty) ...[
-                const SizedBox(height: 5),
-                Wrap(spacing: 4, children: r.tagList.take(3).map((t) => Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-                  decoration: BoxDecoration(color: kGreenLight, borderRadius: BorderRadius.circular(20)),
-                  child: Text(t, style: const TextStyle(fontSize: 10, color: kGreenDark, fontWeight: FontWeight.w500)),
-                )).toList()),
+              const SizedBox(height: 4),
+              Text(_fmt(r.dataHora),
+                  style: const TextStyle(fontSize: 12, color: _t3)),
+              if (r.local.isNotEmpty) ...[
+                const SizedBox(height: 2),
+                Row(children: [
+                  const Icon(Icons.location_on_outlined, size: 13, color: _t3),
+                  const SizedBox(width: 3),
+                  Text(r.local, style: const TextStyle(fontSize: 12, color: _t2)),
+                ]),
+              ],
+              if (r.descricao.isNotEmpty) ...[
+                const SizedBox(height: 6),
+                Text(r.descricao,
+                    style: const TextStyle(fontSize: 13, color: _t2, height: 1.4),
+                    maxLines: 2, overflow: TextOverflow.ellipsis),
               ],
             ]),
-          )),
+          ),
         ]),
       ),
     );
